@@ -1,0 +1,151 @@
+"""Emit or resolve a human checkpoint with atomic, serialized state updates."""
+
+import argparse
+from datetime import datetime, timezone
+import json
+import os
+from pathlib import Path
+import sys
+import tempfile
+import uuid
+
+
+HOOKS = (
+    "PRE_CODE_SPEC_LOCK", "ARCH_DECISION_HOOK", "HIGH_RISK_OP_HOOK",
+    "TEST_TRIAGE_HOOK", "SCOPE_DRIFT_HOOK", "FINAL_ACCEPTANCE_HOOK",
+)
+
+
+def timestamp():
+    return datetime.now(timezone.utc).isoformat()
+
+
+def load_state(path):
+    if not path.exists():
+        return {"schema_version": 1, "active_checkpoint_id": None, "checkpoints": []}
+    state = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(state, dict) or state.get("schema_version") != 1 or not isinstance(state.get("checkpoints"), list):
+        raise ValueError("Unsupported or malformed checkpoint state")
+    seen = set()
+    pending = []
+    for record in state["checkpoints"]:
+        if not isinstance(record, dict):
+            raise ValueError("Malformed checkpoint record")
+        identity = record.get("id")
+        if not isinstance(identity, str) or not identity or identity in seen:
+            raise ValueError("Invalid or duplicate checkpoint ID")
+        seen.add(identity)
+        if record.get("hook_type") not in HOOKS or record.get("status") not in ("pending", "resolved"):
+            raise ValueError("Invalid checkpoint type or status")
+        for key in ("summary", "evidence", "recommendation", "phase", "created_at"):
+            if not isinstance(record.get(key), str):
+                raise ValueError("Invalid checkpoint field: " + key)
+        options = record.get("options")
+        if not isinstance(options, list) or not 2 <= len(options) <= 3 or any(not isinstance(x, str) or not x.strip() for x in options):
+            raise ValueError("Invalid checkpoint options")
+        if record["status"] == "pending":
+            if record.get("resolution") is not None:
+                raise ValueError("Pending checkpoint contains resolution")
+            pending.append(identity)
+        else:
+            resolution = record.get("resolution")
+            if not isinstance(resolution, dict) or any(not isinstance(resolution.get(k), str) or not resolution[k].strip() for k in ("decision", "resolved_at")):
+                raise ValueError("Invalid checkpoint resolution")
+    active = state.get("active_checkpoint_id")
+    if "active_checkpoint_id" not in state or (pending != [active] if active is not None else bool(pending)):
+        raise ValueError("Active checkpoint does not match pending history")
+    return state
+
+
+def save_state(path, state):
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent, delete=False) as handle:
+            temporary = Path(handle.name)
+            json.dump(state, handle, indent=2, ensure_ascii=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        if temporary is not None and temporary.exists():
+            temporary.unlink()
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    action = parser.add_mutually_exclusive_group(required=True)
+    action.add_argument("--hook-type", choices=HOOKS)
+    action.add_argument("--resolve", metavar="CHECKPOINT_ID")
+    parser.add_argument("--summary")
+    parser.add_argument("--options")
+    parser.add_argument("--evidence", default="")
+    parser.add_argument("--recommendation")
+    parser.add_argument("--phase", default="BUILD_AND_VERIFY")
+    parser.add_argument("--decision")
+    parser.add_argument("--state-file", type=Path, default=Path(".codex-spec-state.json"))
+    args = parser.parse_args(argv)
+    if args.hook_type:
+        options = [item.strip() for item in (args.options or "").split(",")]
+        if not args.summary or not args.summary.strip() or not 2 <= len(options) <= 3 or not all(options) or len(set(options)) != len(options):
+            parser.error("Emission requires a nonempty summary and 2–3 distinct comma-separated options")
+        if args.decision is not None:
+            parser.error("Use --decision only with --resolve")
+        if args.recommendation is not None and not args.recommendation.strip():
+            parser.error("Recommendation cannot be empty")
+    elif not args.decision or not args.decision.strip():
+        parser.error("Resolution requires a nonempty --decision from the user's response")
+    elif args.summary is not None or args.options is not None or args.recommendation is not None:
+        parser.error("Emission fields cannot be used with --resolve")
+
+    path = args.state_file.absolute()
+    lock = path.with_name(path.name + ".lock")
+    acquired = False
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with lock.open("x", encoding="utf-8") as handle:
+            acquired = True
+            handle.write(str(os.getpid()))
+        state = load_state(path)
+        if args.hook_type:
+            if state["active_checkpoint_id"] is not None:
+                raise ValueError("Resolve the active checkpoint before emitting another")
+            record = {
+                "id": str(uuid.uuid4()), "hook_type": args.hook_type,
+                "summary": args.summary.strip(), "options": options,
+                "evidence": args.evidence, "recommendation": args.recommendation or options[0],
+                "phase": args.phase, "created_at": timestamp(),
+                "status": "pending", "resolution": None,
+            }
+            state["checkpoints"].append(record)
+            state["active_checkpoint_id"] = record["id"]
+            banner = [f"HUMAN INTERVENTION REQUIRED [{record['hook_type']}]", f"Checkpoint: {record['id']}",
+                      f"Hook Trigger Reason: {record['summary']}",
+                      f"Current State & Evidence: {record['phase']} | {record['evidence'] or 'See accompanying chat evidence'}",
+                      "Concrete Options:"]
+            banner.extend(f"  {chr(65 + i)}. {option}" for i, option in enumerate(options))
+            banner.extend([f"Recommended Path: {record['recommendation']}", "PAUSED: wait for the user's decision."])
+        else:
+            if state["active_checkpoint_id"] != args.resolve:
+                raise ValueError("Resolution ID is not the active checkpoint")
+            record = next(item for item in state["checkpoints"] if item["id"] == args.resolve)
+            record["status"] = "resolved"
+            record["resolution"] = {"decision": args.decision.strip(), "resolved_at": timestamp()}
+            state["active_checkpoint_id"] = None
+            banner = [f"Recorded resolution for {args.resolve}", f"Decision: {args.decision.strip()}"]
+        save_state(path, state)
+        print("\n".join(banner))
+        return 0
+    except (OSError, ValueError, UnicodeError) as exc:
+        print(json.dumps({"error": str(exc), "paused": True}), file=sys.stderr)
+        return 2
+    finally:
+        if acquired:
+            try:
+                lock.unlink()
+            except OSError as exc:
+                print(f"Warning: could not remove checkpoint lock: {exc}", file=sys.stderr)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
