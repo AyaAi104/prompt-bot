@@ -1,6 +1,7 @@
 """Exercise the public CLIs in isolated temporary workspaces."""
 
 import json
+import hashlib
 from pathlib import Path
 import subprocess
 import sys
@@ -162,6 +163,103 @@ class ScriptTests(unittest.TestCase):
         self.assertEqual(self.emit("SCOPE_DRIFT_HOOK", "--state-file", path).returncode, 0)
         self.assertTrue(path.exists())
         self.assertFalse(path.with_name("state.json.lock").exists())
+
+    def test_v2_contract_all_sizes(self):
+        for size in ("S", "M", "L"):
+            text = contract().replace("revision: 1", "format_version: 2\nsize: " + size + "\nrevision: 1")
+            text += "\n## Scope\nGreeting only; no network.\n## Interfaces\ncli.py accepts one name.\n## Verification\nRun python -m unittest; expect exit 0.\n"
+            self.assertEqual(self.validate(text)[0], 0)
+
+    def test_v2_requires_extended_sections_and_size(self):
+        text = contract().replace("revision: 1", "format_version: 2\nrevision: 1")
+        code, result = self.validate(text)
+        self.assertEqual(code, 2)
+        self.assertTrue({"Scope", "Interfaces", "Verification", "metadata"}.issubset(
+            {item["element"] for item in result["diagnostics"]}))
+        self.assertEqual(self.validate(text.replace("revision: 1", "size: XL\nrevision: 1"))[0], 2)
+
+    def test_v2_rejects_unresolved_extended_content(self):
+        text = contract().replace("revision: 1", "format_version: 2\nsize: M\nrevision: 1")
+        text += "\n## Scope\nNo networking.\n## Interfaces\ncli.py\n## Verification\nRun unittest.\n"
+        for original in ("No networking.", "cli.py", "Run unittest."):
+            for replacement in ("", "TBD", "<!-- explanation later -->"):
+                self.assertEqual(self.validate(text.replace(original, replacement))[0], 2)
+
+    def test_format_version_compatibility(self):
+        self.assertEqual(self.validate(contract().replace("revision: 1", "format_version: 1\nrevision: 1"))[0], 0)
+        self.assertEqual(self.validate(contract().replace("revision: 1", "format_version: 99\nrevision: 1"))[0], 2)
+
+    def test_handoff_requires_real_artifact(self):
+        for hook in ("NEW_CHAT_REVIEW_HOOK", "CONTEXT_HANDOFF_HOOK"):
+            self.assertEqual(self.emit(hook).returncode, 2)
+            self.assertEqual(self.emit(hook, "--handoff-file", "missing.md").returncode, 2)
+            for contents in (b" \n", b"\xff"):
+                (self.work / "handoff.md").write_bytes(contents)
+                self.assertEqual(self.emit(hook, "--handoff-file", "handoff.md").returncode, 2)
+        self.assertFalse((self.work / ".codex-spec-state.json").exists())
+
+    def test_manual_review_waits_for_report_and_preserves_history(self):
+        handoff = self.work / "handoff.md"
+        handoff.write_text("Read the contract and actual diff; report findings.", encoding="utf-8")
+        result = self.emit("NEW_CHAT_REVIEW_HOOK", "--handoff-file", handoff)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Please open a new chat yourself", result.stdout)
+        state = self.state()
+        identity = state["active_checkpoint_id"]
+        record = state["checkpoints"][-1]
+        self.assertEqual(record["handoff"]["path"], str(handoff.resolve()))
+        self.assertEqual(record["handoff"]["sha256"], hashlib.sha256(handoff.read_bytes()).hexdigest())
+        base_args = ("--resolve", identity, "--decision", "User returned review")
+        self.assertEqual(self.run_script("hitl_checkpoint.py", *base_args).returncode, 2)
+        report = self.work / "report.md"
+        for contents in (None, b" \n", b"\xff"):
+            if contents is not None:
+                report.write_bytes(contents)
+            self.assertEqual(self.run_script("hitl_checkpoint.py", *base_args, "--review-report", report).returncode, 2)
+            self.assertEqual(self.state(), state)
+        report.write_text("Changes requested: cover the missing error case.", encoding="utf-8")
+        result = self.run_script("hitl_checkpoint.py", *base_args, "--review-report", report)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        resolved = self.state()
+        self.assertIsNone(resolved["active_checkpoint_id"])
+        self.assertEqual(resolved["checkpoints"][-1]["resolution"]["review_report"]["sha256"],
+                         hashlib.sha256(report.read_bytes()).hexdigest())
+        # History must remain usable after the local evidence is archived/moved.
+        report.unlink()
+        handoff.unlink()
+        self.assertEqual(self.emit().returncode, 0)
+        self.assertEqual(len(self.state()["checkpoints"]), 2)
+
+    def test_continuation_can_resume_without_review_report(self):
+        handoff = self.work / "handoff.md"
+        handoff.write_text("Continue task T-2 after reading progress.", encoding="utf-8")
+        self.assertEqual(self.emit("CONTEXT_HANDOFF_HOOK", "--handoff-file", handoff).returncode, 0)
+        identity = self.state()["active_checkpoint_id"]
+        result = self.run_script("hitl_checkpoint.py", "--resolve", identity,
+                                 "--decision", "User opened this chat and requested continuation")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIsNone(self.state()["active_checkpoint_id"])
+
+    def test_artifact_flags_are_rejected_for_unrelated_hooks(self):
+        self.assertEqual(self.emit("ARCH_DECISION_HOOK", "--handoff-file", "handoff.md").returncode, 2)
+        self.assertEqual(self.emit("ARCH_DECISION_HOOK", "--review-report", "report.md").returncode, 2)
+        self.assertEqual(self.emit().returncode, 0)
+        state = self.state()
+        result = self.run_script("hitl_checkpoint.py", "--resolve", state["active_checkpoint_id"],
+                                 "--decision", "Accepted", "--review-report", "report.md")
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(self.state(), state)
+
+    def test_corrupt_handoff_evidence_is_rejected(self):
+        handoff = self.work / "handoff.md"
+        handoff.write_text("Review the implementation.", encoding="utf-8")
+        self.assertEqual(self.emit("NEW_CHAT_REVIEW_HOOK", "--handoff-file", handoff).returncode, 0)
+        state = self.state()
+        state["checkpoints"][0]["handoff"]["sha256"] = "invalid"
+        path = self.work / ".codex-spec-state.json"
+        path.write_text(json.dumps(state), encoding="utf-8")
+        self.assertEqual(self.emit().returncode, 2)
+        self.assertEqual(self.state(), state)
 
 
 if __name__ == "__main__":

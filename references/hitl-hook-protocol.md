@@ -10,6 +10,8 @@
 | TEST_TRIAGE_HOOK | Three consecutive failing attempts for one root cause, or an immediate spec contradiction | User selects a remediation; revise contract if needed |
 | SCOPE_DRIFT_HOOK | Necessary behavior falls outside locked constraints/input | User accepts a contract revision or selects an in-scope alternative |
 | FINAL_ACCEPTANCE_HOOK | Verification evidence is ready for review | User explicitly accepts or requests refinement |
+| NEW_CHAT_REVIEW_HOOK | Independent fresh-chat review required | User manually opens review chat and returns its report; reconcile it before acceptance |
+| CONTEXT_HANDOFF_HOOK | Fresh context required for continuation/research | User manually opens a chat with the handoff and authorizes continuation |
 
 Preserve existing authorization; do not re-ask for the same approved action.
 Approval applies only to the recorded scope. If circumstances or the contract
@@ -93,3 +95,38 @@ state corruption, concurrent access, or filesystem errors. A successful emission
 means **paused**, not permission granted. On a failed write, remain paused and
 report the error. Logs can contain sensitive evidence; include only what the
 decision needs and follow the project's existing handling rules.
+
+## Manual new-chat hooks
+
+Read [the handoff guide](manual-chat-handoff.md) and populate the handoff file before
+emitting either new hook. They require `--handoff-file` pointing to a readable,
+nonempty UTF-8 text file. The checkpoint stores `handoff: {path, sha256}` with an
+absolute path and a SHA-256 hash of its bytes. Do not update a handed-off file
+silently after recording its identity; make revisions explicit to the user.
+
+```sh
+python3 scripts/hitl_checkpoint.py --hook-type NEW_CHAT_REVIEW_HOOK --summary "Independent review is ready" --options "Open review chat,Discuss blockers first" --handoff-file .codex/handoff.md --phase WAIT_FOR_USER_NEW_CHAT
+```
+
+Present a kind reminder, required file paths, and the complete copyable prompt.
+Pause task execution and let the user open a new chat. Never clear/reset the
+current chat, open a chat automatically, or spawn a reviewer as a substitute.
+CONTEXT_HANDOFF_HOOK uses the same arguments and can be resolved with the user's
+continuation instruction. Independent review requires an actual report:
+
+```sh
+python3 scripts/hitl_checkpoint.py --resolve CHECKPOINT_ID --decision "User returned review; findings require repair" --review-report .codex/review-report.md
+```
+
+For NEW_CHAT_REVIEW_HOOK, missing, empty, unreadable, or invalid UTF-8 reports
+block resolution and leave the state unchanged. Resolution records
+`review_report: {path, sha256}` alongside decision and timestamp. It means review
+evidence was received, not that review passed. A reviewer does not resolve the
+author's checkpoint. The author reconciles the report on the user's return and
+requests renewed review when material changes invalidate the reviewed snapshot.
+
+The original six hook formats remain compatible with schema version 1. Historical
+artifact records are validated structurally without requiring their files to still
+exist. Hashes record identity, not authenticity. The utility cannot judge whether
+a report is independent, complete, current, or favorable, and is not a Stop hook.
+Never pass arbitrary text as a fabricated report to bypass the review requirement.

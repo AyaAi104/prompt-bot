@@ -1,6 +1,7 @@
 """Emit or resolve a human checkpoint with atomic, serialized state updates."""
 
 import argparse
+import hashlib
 from datetime import datetime, timezone
 import json
 import os
@@ -13,7 +14,26 @@ import uuid
 HOOKS = (
     "PRE_CODE_SPEC_LOCK", "ARCH_DECISION_HOOK", "HIGH_RISK_OP_HOOK",
     "TEST_TRIAGE_HOOK", "SCOPE_DRIFT_HOOK", "FINAL_ACCEPTANCE_HOOK",
+    "NEW_CHAT_REVIEW_HOOK", "CONTEXT_HANDOFF_HOOK",
 )
+HANDOFF_HOOKS = ("NEW_CHAT_REVIEW_HOOK", "CONTEXT_HANDOFF_HOOK")
+
+
+def artifact(path):
+    """Record a readable, nonempty UTF-8 artifact without executing its contents."""
+    path = path.resolve()
+    data = path.read_bytes()
+    if not data.decode("utf-8-sig").strip():
+        raise ValueError("Artifact must contain nonempty UTF-8 text: " + str(path))
+    return {"path": str(path), "sha256": hashlib.sha256(data).hexdigest()}
+
+
+def valid_artifact(value):
+    # Historical evidence may have moved; validate the record, not live contents.
+    return (isinstance(value, dict) and isinstance(value.get("path"), str)
+            and bool(value["path"].strip()) and isinstance(value.get("sha256"), str)
+            and len(value["sha256"]) == 64
+            and all(c in "0123456789abcdef" for c in value["sha256"]))
 
 
 def timestamp():
@@ -37,6 +57,8 @@ def load_state(path):
         seen.add(identity)
         if record.get("hook_type") not in HOOKS or record.get("status") not in ("pending", "resolved"):
             raise ValueError("Invalid checkpoint type or status")
+        if record["hook_type"] in HANDOFF_HOOKS and not valid_artifact(record.get("handoff")):
+            raise ValueError("Handoff checkpoint requires an artifact path and SHA-256")
         for key in ("summary", "evidence", "recommendation", "phase", "created_at"):
             if not isinstance(record.get(key), str):
                 raise ValueError("Invalid checkpoint field: " + key)
@@ -51,6 +73,8 @@ def load_state(path):
             resolution = record.get("resolution")
             if not isinstance(resolution, dict) or any(not isinstance(resolution.get(k), str) or not resolution[k].strip() for k in ("decision", "resolved_at")):
                 raise ValueError("Invalid checkpoint resolution")
+            if record["hook_type"] == "NEW_CHAT_REVIEW_HOOK" and not valid_artifact(resolution.get("review_report")):
+                raise ValueError("Resolved review checkpoint requires report evidence")
     active = state.get("active_checkpoint_id")
     if "active_checkpoint_id" not in state or (pending != [active] if active is not None else bool(pending)):
         raise ValueError("Active checkpoint does not match pending history")
@@ -83,6 +107,8 @@ def main(argv=None):
     parser.add_argument("--recommendation")
     parser.add_argument("--phase", default="BUILD_AND_VERIFY")
     parser.add_argument("--decision")
+    parser.add_argument("--handoff-file", type=Path, help="Required for manual new-chat hooks")
+    parser.add_argument("--review-report", type=Path, help="Required when resolving a new-chat review")
     parser.add_argument("--state-file", type=Path, default=Path(".codex-spec-state.json"))
     args = parser.parse_args(argv)
     if args.hook_type:
@@ -93,9 +119,15 @@ def main(argv=None):
             parser.error("Use --decision only with --resolve")
         if args.recommendation is not None and not args.recommendation.strip():
             parser.error("Recommendation cannot be empty")
+        if args.review_report is not None:
+            parser.error("Use --review-report only with --resolve")
+        if args.hook_type in HANDOFF_HOOKS and args.handoff_file is None:
+            parser.error("Manual new-chat hooks require --handoff-file")
+        if args.hook_type not in HANDOFF_HOOKS and args.handoff_file is not None:
+            parser.error("Use --handoff-file only with a manual new-chat hook")
     elif not args.decision or not args.decision.strip():
         parser.error("Resolution requires a nonempty --decision from the user's response")
-    elif args.summary is not None or args.options is not None or args.recommendation is not None:
+    elif args.summary is not None or args.options is not None or args.recommendation is not None or args.handoff_file is not None:
         parser.error("Emission fields cannot be used with --resolve")
 
     path = args.state_file.absolute()
@@ -117,6 +149,8 @@ def main(argv=None):
                 "phase": args.phase, "created_at": timestamp(),
                 "status": "pending", "resolution": None,
             }
+            if args.hook_type in HANDOFF_HOOKS:
+                record["handoff"] = artifact(args.handoff_file)
             state["checkpoints"].append(record)
             state["active_checkpoint_id"] = record["id"]
             banner = [f"HUMAN INTERVENTION REQUIRED [{record['hook_type']}]", f"Checkpoint: {record['id']}",
@@ -125,12 +159,27 @@ def main(argv=None):
                       "Concrete Options:"]
             banner.extend(f"  {chr(65 + i)}. {option}" for i, option in enumerate(options))
             banner.extend([f"Recommended Path: {record['recommendation']}", "PAUSED: wait for the user's decision."])
+            if args.hook_type in HANDOFF_HOOKS:
+                banner.extend([f"Handoff file: {record['handoff']['path']}",
+                               "Please open a new chat yourself and paste the prompt in the handoff file.",
+                               "Keep this chat intact. No chat was opened or cleared by this utility."])
+                if args.hook_type == "NEW_CHAT_REVIEW_HOOK":
+                    banner.append("Independent review remains pending until its report is returned.")
         else:
             if state["active_checkpoint_id"] != args.resolve:
                 raise ValueError("Resolution ID is not the active checkpoint")
             record = next(item for item in state["checkpoints"] if item["id"] == args.resolve)
+            report = None
+            if record["hook_type"] == "NEW_CHAT_REVIEW_HOOK":
+                if args.review_report is None:
+                    raise ValueError("Independent review requires --review-report before resolution")
+                report = artifact(args.review_report)
+            elif args.review_report is not None:
+                raise ValueError("--review-report applies only to NEW_CHAT_REVIEW_HOOK")
             record["status"] = "resolved"
             record["resolution"] = {"decision": args.decision.strip(), "resolved_at": timestamp()}
+            if report is not None:
+                record["resolution"]["review_report"] = report
             state["active_checkpoint_id"] = None
             banner = [f"Recorded resolution for {args.resolve}", f"Decision: {args.decision.strip()}"]
         save_state(path, state)

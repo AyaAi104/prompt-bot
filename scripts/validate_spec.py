@@ -14,6 +14,7 @@ ELEMENTS = {
     "Output": "output_status",
     "Acceptance Criteria": "acceptance_criteria_status",
 }
+EXTENDED_SECTIONS = ("Scope", "Interfaces", "Verification")
 PLACEHOLDER = re.compile(r"\b(?:TODO|TBD|FIXME)\b|\?\?\?|\{\{.*?\}\}|<insert\b", re.I)
 
 
@@ -44,6 +45,15 @@ def validate(text):
         errors.append({"element": "metadata", "reason": "Contract must have locked: true"})
     if not re.fullmatch(r"[1-9][0-9]*", metadata.get("revision", "")):
         errors.append({"element": "metadata", "reason": "Revision must be a positive integer"})
+
+    version = metadata.get("format_version", "1")
+    if version not in ("1", "2"):
+        errors.append({"element": "metadata", "reason": "Unsupported format_version; use 1 or 2"})
+    required = list(ELEMENTS)
+    if version == "2":
+        required.extend(EXTENDED_SECTIONS)
+        if metadata.get("size") not in ("S", "M", "L"):
+            errors.append({"element": "metadata", "reason": "Version 2 requires size: S, M, or L"})
 
     sections = {}
     current = None
@@ -78,7 +88,7 @@ def validate(text):
         heading = re.match(r"^\s{0,3}(#{1,6})\s+(.+?)\s*#*\s*$", clean)
         if heading and len(heading[1]) <= 2:
             name = heading[2]
-            current = name if len(heading[1]) == 2 and name in ELEMENTS else None
+            current = name if len(heading[1]) == 2 and name in required else None
             if current:
                 if current in sections:
                     errors.append({"element": current, "reason": "Duplicate section"})
@@ -89,11 +99,12 @@ def validate(text):
         errors.append({"element": "document", "reason": "Unclosed code fence or HTML comment"})
 
     statuses = {}
-    for name, key in ELEMENTS.items():
+    for name in required:
         content = "\n".join(sections.get(name, [])).strip()
-        statuses[name] = metadata.get(key, "MISSING")
-        if statuses[name] != "CLEAR":
-            errors.append({"element": name, "reason": "Status must be CLEAR", "status": statuses[name]})
+        if name in ELEMENTS:
+            statuses[name] = metadata.get(ELEMENTS[name], "MISSING")
+            if statuses[name] != "CLEAR":
+                errors.append({"element": name, "reason": "Status must be CLEAR", "status": statuses[name]})
         if not re.search(r"\w", re.sub(r"(?m)^\s*#{1,6}.*$", "", content)):
             errors.append({"element": name, "reason": "Missing or empty section"})
         if PLACEHOLDER.search(content):

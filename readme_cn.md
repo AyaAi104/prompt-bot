@@ -1,4 +1,4 @@
-# spec-driven-coder
+# prompt-bot
 
 [English documentation](readme.md)
 
@@ -21,9 +21,16 @@
 ├── readme_cn.md
 ├── references/
 │   ├── five-element-rubric.md
-│   └── hitl-hook-protocol.md
+│   ├── hitl-hook-protocol.md
+│   ├── clarification-and-research.md
+│   ├── pipeline-and-verification.md
+│   └── manual-chat-handoff.md
 ├── assets/
-│   └── spec-contract.template.md
+│   ├── spec-contract.template.md
+│   ├── tasks.template.md
+│   ├── progress.template.md
+│   ├── handoff.template.md
+│   └── coding-prompt.template.md
 ├── scripts/
 │   ├── validate_spec.py
 │   └── hitl_checkpoint.py
@@ -36,6 +43,13 @@
 | [SKILL.md](SKILL.md) | 技能入口，定义触发场景、五阶段状态机、需求澄清门槛、实现与测试循环、人工检查点和最终验收流程。 |
 | [references/five-element-rubric.md](references/five-element-rubric.md) | 五类需求的评估规则、不明确需求的示例、建议提问方式，以及规格文件的格式约定。 |
 | [references/hitl-hook-protocol.md](references/hitl-hook-protocol.md) | 各类钩子的触发条件、中断卡片、检查点 JSON 结构、暂停与恢复规则，以及日志写入失败时的处理方式。 |
+| [references/clarification-and-research.md](references/clarification-and-research.md) | 缺信息先提问，以及用户不知道时的检索、分析和确认分支。 |
+| [references/pipeline-and-verification.md](references/pipeline-and-verification.md) | S/M/L 分级、定向探索、纵向切片和验证方式选择。 |
+| [references/manual-chat-handoff.md](references/manual-chat-handoff.md) | 用户手动开启新聊天的交接材料、审查与恢复规则。 |
+| [assets/tasks.template.md](assets/tasks.template.md) | 纵向任务清单，记录验收编号、依赖、命令和结果。 |
+| [assets/progress.template.md](assets/progress.template.md) | 持久化已完成工作、决定、失败、阻塞和下一步。 |
+| [assets/handoff.template.md](assets/handoff.template.md) | 记录精确文件、快照身份、命令和可复制的新聊天 Prompt。 |
+| [assets/coding-prompt.template.md](assets/coding-prompt.template.md) | 分离背景、参考样板、带原因的约束和执行任务。 |
 | [assets/spec-contract.template.md](assets/spec-contract.template.md) | 任务规格模板，包含版本号、锁定状态、五项需求状态和章节标题。模板在填写完成前会校验失败，这是预期行为。 |
 | [scripts/validate_spec.py](scripts/validate_spec.py) | 检查规格结构、必填内容、需求状态及未解决的占位标记，输出 JSON 诊断信息。 |
 | [scripts/hitl_checkpoint.py](scripts/hitl_checkpoint.py) | 输出人工介入提示，保存检查点历史，并记录用户决定以解除当前检查点。 |
@@ -78,7 +92,9 @@
 
 ## 校验需求规格
 
-将 `assets/spec-contract.template.md` 复制到 `.codex/active-spec.md`，必要时先创建 `.codex` 目录。根据确认后的需求填写全部五个章节。保留模板中的英文二级标题和元数据字段名，章节正文可以使用中文或其他语言。
+将 `assets/spec-contract.template.md` 复制到 `.codex/active-spec.md`，必要时先创建 `.codex` 目录。根据确认后的需求填写五个核心章节，以及 Scope、Interfaces 和 Verification 三个补充章节。保留模板中的英文二级标题和元数据字段名，章节正文可以使用中文或其他语言。
+
+新规格使用 `format_version: 2`，并设置 `size: S`、`M` 或 `L`。未声明版本或显式使用版本 1 的旧规格仍可校验，实质修订时应升级；未知版本会被拒绝。
 
 校验前，将五项状态设为 `CLEAR`，将 `locked` 设为 `true`，并确保 `revision` 是正整数。验收标准应包含 `AC-1` 等编号。
 
@@ -104,7 +120,9 @@ python scripts/validate_spec.py .codex/active-spec.md
 | `HIGH_RISK_OP_HOOK` | 操作尚需授权，例如删除已有文件、修改生产配置、安装外部依赖或运行迁移。 |
 | `TEST_TRIAGE_HOOK` | 同一根因导致验证连续失败三次，或发现规格本身存在矛盾。 |
 | `SCOPE_DRIFT_HOOK` | 必要行为超出了已锁定的约束或输入范围。 |
-| `FINAL_ACCEPTANCE_HOOK` | 验证证据已准备好，等待用户验收。 |
+| `FINAL_ACCEPTANCE_HOOK` | 必需验证和独立审查已完成处理，等待用户验收。 |
+| `NEW_CHAT_REVIEW_HOOK` | 暂停，等待用户手动开新聊天独立审查；需交接文件及后续报告。 |
+| `CONTEXT_HANDOFF_HOOK` | 暂停，等待用户手动开新聊天续做或调研；需交接文件。 |
 
 创建检查点：
 
@@ -122,11 +140,37 @@ python scripts/hitl_checkpoint.py --resolve CHECKPOINT_ID --decision "用户选�
 
 检查点命令在记录成功时返回 `0`，参数错误、状态异常、锁冲突或文件系统错误时返回 `2`。成功创建检查点表示工作应当暂停，并不代表获得授权。记录解决结果也不会自动重启智能体，或自动校验修改后的规格。
 
+## 保留问答模式与手动新聊天
+
+缺少必要信息时，AI 先向用户提问。用户回答“不知道”后，AI 才进入相应的检索或分析分支：核对已有证据，必要时搜索官方或一手来源，或分析稳定的技术取舍，给出建议及不确定性。不会编造私人业务规则，也不会将沉默当作同意。明确授权 AI 决定的事项可在授权边界内继续，其他重要决定仍需确认。
+
+S 级任务保留简短的五要素门槛，信息齐全时不做重复访谈；M 级增加持久化计划和纵向切片；L 级必须独立审查。M/S 级在用户要求或接口与风险需要时也进入独立审查。根据实际项目选择测试、构建、类型检查、lint 和 UI 截图对比。
+
+需要新上下文或交叉验证时，AI 会先保存交接材料，然后**暂停任务**，礼貌提醒你在同一工作区手动开启新聊天，提供准确的文件路径、可直接复制的 Prompt，以及需要带回的报告。AI 不自行清理或压缩当前聊天，不自动创建聊天，也不使用子智能体代替这次独立审查。新聊天以只读审查模式工作，不会递归要求再开一个审查聊天。
+
+准备好真实交接文件后：
+
+```sh
+python scripts/hitl_checkpoint.py --hook-type NEW_CHAT_REVIEW_HOOK --summary "需要独立审查" --options "手动开启新聊天,先讨论阻塞" --handoff-file .codex/handoff.md --phase WAIT_FOR_USER_NEW_CHAT
+```
+
+你带回真实报告后，原聊天根据你的决定记录结果：
+
+```sh
+python scripts/hitl_checkpoint.py --resolve CHECKPOINT_ID --decision "用户带回审查报告，继续处理发现" --review-report .codex/review-report.md
+```
+
+新增检查点会记录文件绝对路径与 SHA-256。报告缺失、为空、不可读取或不是有效 UTF-8 时，不能解除审查检查点。收到报告不代表审查通过，AI 仍需核对快照并处理问题；脚本不能认证报告作者或判断报告质量。原有检查点命令和旧规格格式继续兼容。
+
 ## 运行时文件
 
 | 路径 | 功能 |
 | --- | --- |
 | `.codex/active-spec.md` | 智能体从模板生成的当前任务规格。 |
+| `.codex/tasks.md` | M/L 任务的纵向切片计划。 |
+| `.codex/progress.md` | 持久化进度、决定和阻塞。 |
+| `.codex/handoff.md` | 交接文件清单、快照、命令和新聊天 Prompt。 |
+| `.codex/review-report.md` | 独立审查发现和验证证据。 |
 | `.codex-spec-state.json` | 保存检查点历史、当前检查点 ID、相关证据、时间戳和用户决定。 |
 | `.codex-spec-state.json.lock` | 更新检查点状态时使用的临时独占锁文件。 |
 
@@ -140,6 +184,6 @@ python scripts/hitl_checkpoint.py --resolve CHECKPOINT_ID --decision "用户选�
 python -m unittest discover -s tests -v
 ```
 
-项目初始验证已通过全部 17 项测试。测试使用隔离的临时工作区，覆盖完整与不完整规格、占位标记、错误元数据、Markdown 解析、文件缺失或读取失败、六种钩子、决策历史、无效请求、损坏状态、锁冲突和自定义日志路径。
+更新后的脚本套件已通过全部 26 项测试。测试使用隔离的临时工作区，覆盖完整与不完整规格、占位标记、错误元数据、Markdown 解析、文件缺失或读取失败、八种钩子、版本 2 规格、交接文件及报告要求、决策历史、无效请求、损坏状态、锁冲突和自定义日志路径。
 
 这些测试验证的是辅助工具，不代表智能体一定会遵守全部指令，也不代表后续开发的应用已经满足验收标准。每个实际任务仍需自己的实现测试和验收证据。

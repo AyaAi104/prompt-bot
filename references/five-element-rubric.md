@@ -10,6 +10,11 @@ interpretations. Only CLEAR passes the gate. A statement such as "no additional
 performance constraints" is valid if explicitly confirmed; an empty section is
 not. Do not invent arbitrary security or performance requirements.
 
+When required information is missing, ask the user first. If they do not know,
+follow [the research/reasoning branch](clarification-and-research.md). Evidence
+may resolve technical facts; consequential business decisions still need confirmed
+requirements or explicit delegation. Never convert silence into CLEAR.
+
 ## Goal
 
 Pass when the intended user, core behavior, and useful outcome are identifiable.
@@ -98,3 +103,19 @@ Literal marker strings in payload examples also trigger the conservative
 placeholder check; describe those payloads in words in the contract instead.
 The script does not prove that prose is meaningful, criteria cover every behavior,
 or the lock represents genuine user confirmation. Perform the semantic audit too.
+
+## Version 2 contracts
+
+New contracts declare `format_version: 2` and `size: S`, `M`, or `L`. In addition
+to the five required sections, require nonempty `## Scope`, `## Interfaces`, and
+`## Verification` sections. Apply the same placeholder checks to these sections.
+Scope defines exclusions and intended changes; Interfaces identifies affected
+files, data/API/error contracts, permissions and concurrency where relevant;
+Verification specifies commands, expected signals, and independent/visual review
+where appropriate. Explain why an item is inapplicable instead of leaving it empty.
+
+The five status keys remain unchanged. Missing or explicit `format_version: 1`
+keeps legacy structural validation so existing contracts remain readable. Unknown
+versions fail. Upgrade a legacy contract to version 2 when materially revising it;
+do not downgrade new contracts to avoid the additional checks. The validator does
+not inspect source files, execute verification commands, or authenticate consent.

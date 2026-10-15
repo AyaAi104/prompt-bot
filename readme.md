@@ -1,4 +1,4 @@
-# spec-driven-coder
+# prompt-bot
 
 [中文说明](readme_cn.md)
 
@@ -24,9 +24,16 @@ The package contains agent instructions, reference documents, a specification te
 ├── readme_cn.md
 ├── references/
 │   ├── five-element-rubric.md
-│   └── hitl-hook-protocol.md
+│   ├── hitl-hook-protocol.md
+│   ├── clarification-and-research.md
+│   ├── pipeline-and-verification.md
+│   └── manual-chat-handoff.md
 ├── assets/
-│   └── spec-contract.template.md
+│   ├── spec-contract.template.md
+│   ├── tasks.template.md
+│   ├── progress.template.md
+│   ├── handoff.template.md
+│   └── coding-prompt.template.md
 ├── scripts/
 │   ├── validate_spec.py
 │   └── hitl_checkpoint.py
@@ -39,6 +46,13 @@ The package contains agent instructions, reference documents, a specification te
 | [SKILL.md](SKILL.md) | Skill entry point: trigger description, five-phase state machine, clarification gate, implementation and testing loop, checkpoint rules, and acceptance hand-off. |
 | [references/five-element-rubric.md](references/five-element-rubric.md) | Evaluation rules for the five requirement dimensions, examples of unclear requirements, suggested questions, and the supported contract format. |
 | [references/hitl-hook-protocol.md](references/hitl-hook-protocol.md) | Hook triggers, interrupt cards, checkpoint JSON structure, pause/resume rules, and logging failure handling. |
+| [references/clarification-and-research.md](references/clarification-and-research.md) | Question-first behavior and the research/reasoning branch when the user does not know. |
+| [references/pipeline-and-verification.md](references/pipeline-and-verification.md) | S/M/L sizing, scoped exploration, vertical slicing, and verification selection. |
+| [references/manual-chat-handoff.md](references/manual-chat-handoff.md) | User-opened continuation/review chats, evidence packets, and resume rules. |
+| [assets/tasks.template.md](assets/tasks.template.md) | Vertical slice task list with ACs, dependencies, commands, and results. |
+| [assets/progress.template.md](assets/progress.template.md) | Decisions, completed work, failures, blockers, and next action. |
+| [assets/handoff.template.md](assets/handoff.template.md) | Exact files, snapshot identity, commands, and copyable new-chat prompt. |
+| [assets/coding-prompt.template.md](assets/coding-prompt.template.md) | Structured context, repository examples, constraints with reasons, and tasks. |
 | [assets/spec-contract.template.md](assets/spec-contract.template.md) | Starting template for a task's specification, including revision, lock state, requirement statuses, and section headings. It intentionally fails validation until completed. |
 | [scripts/validate_spec.py](scripts/validate_spec.py) | Checks specification structure, required content, statuses, and unresolved placeholders; prints JSON diagnostics. |
 | [scripts/hitl_checkpoint.py](scripts/hitl_checkpoint.py) | Emits human-intervention banners, saves checkpoint history, and records decisions that resolve active checkpoints. |
@@ -81,7 +95,9 @@ The commands below assume the skill scripts and target workspace are in the same
 
 ## Validate a specification
 
-Copy `assets/spec-contract.template.md` to `.codex/active-spec.md`, creating the `.codex` directory if needed. Fill all five sections with confirmed requirements. Keep the exact English level-two headings and metadata keys from the template; the prose may be written in Chinese or another language.
+Copy `assets/spec-contract.template.md` to `.codex/active-spec.md`, creating the `.codex` directory if needed. Fill all five core sections plus Scope, Interfaces, and Verification with confirmed requirements. Keep the exact English level-two headings and metadata keys from the template; the prose may be written in Chinese or another language.
+
+New contracts use `format_version: 2` and `size: S`, `M`, or `L`. Missing or explicit version 1 remains supported for older contracts; upgrade on material revision. Unknown versions fail.
 
 Before validation, set each status to `CLEAR`, set `locked: true`, and use a positive integer `revision`. Include acceptance identifiers such as `AC-1`.
 
@@ -107,7 +123,9 @@ Frontmatter supports a deliberately restricted YAML subset: unquoted scalar fiel
 | `HIGH_RISK_OP_HOOK` | An operation needs authorization, such as deleting existing files, changing production configuration, installing an external package, or running a migration. |
 | `TEST_TRIAGE_HOOK` | Verification fails three consecutive times for the same root cause, or a specification contradiction is discovered. |
 | `SCOPE_DRIFT_HOOK` | Required behavior extends beyond the locked constraints or input contract. |
-| `FINAL_ACCEPTANCE_HOOK` | Verification evidence is ready for the user's acceptance review. |
+| `FINAL_ACCEPTANCE_HOOK` | Required verification and independent review are reconciled; user acceptance remains. |
+| `NEW_CHAT_REVIEW_HOOK` | Pause for independent review in a user-opened chat; requires a handoff and later a report. |
+| `CONTEXT_HANDOFF_HOOK` | Pause for continuation/research in a user-opened chat; requires a handoff. |
 
 Emit a checkpoint:
 
@@ -125,11 +143,37 @@ python scripts/hitl_checkpoint.py --resolve CHECKPOINT_ID --decision "User selec
 
 Checkpoint commands return `0` when the event is saved and `2` on invalid arguments, state errors, lock conflicts, or filesystem failures. Successfully emitting a checkpoint means work is paused; it does not mean approval was granted. Recording a resolution does not itself restart an agent or validate a revised specification.
 
+## Question-first decisions and manual new chats
+
+Missing required information always leads to a user question first. If the user says "I don't know", the agent checks relevant evidence, searches official/primary sources for current facts when needed, or analyzes stable trade-offs. It presents a recommendation and uncertainty. It does not invent private business rules or treat silence as consent. Explicitly delegated decisions may proceed within their bounds; other material choices need confirmation.
+
+S tasks retain a compact five-element gate but skip unnecessary interviews when already clear. M tasks add persistent plans and vertical slices. L tasks require an independent review. M/S tasks also use independent review when requested or justified by interfaces and risk. Applicable tests, build, type checks, lint, and UI screenshot comparisons are selected from the actual project.
+
+When fresh context or cross-validation is required, the agent saves a handoff and **pauses**. It kindly asks you to open a new chat in the same workspace, provides exact file paths and a ready-to-paste prompt, and explains which report to return. It does not clear/compact your conversation, open a chat automatically, or spawn a substitute reviewer. A reviewer works in review-only mode and must not request another reviewer recursively.
+
+After a real handoff file is prepared:
+
+```sh
+python scripts/hitl_checkpoint.py --hook-type NEW_CHAT_REVIEW_HOOK --summary "Independent review required" --options "Open new chat,Discuss blockers first" --handoff-file .codex/handoff.md --phase WAIT_FOR_USER_NEW_CHAT
+```
+
+After you return the actual report, the author records it with your decision:
+
+```sh
+python scripts/hitl_checkpoint.py --resolve CHECKPOINT_ID --decision "User returned review; reconcile findings" --review-report .codex/review-report.md
+```
+
+The new hooks record absolute artifact paths and SHA-256 hashes. A missing, empty, unreadable, or invalid UTF-8 report cannot resolve a review checkpoint. Receipt of a report is not approval: the agent must check snapshot identity and address findings. The CLI cannot authenticate who wrote it or judge its quality. Original hook commands and legacy contracts remain compatible.
+
 ## Runtime artifacts
 
 | Path | Purpose |
 | --- | --- |
 | `.codex/active-spec.md` | Task-specific specification created by the agent from the template. |
+| `.codex/tasks.md` | M/L vertical slice plan. |
+| `.codex/progress.md` | Persistent progress and blockers. |
+| `.codex/handoff.md` | Files, snapshot, commands, and copyable manual new-chat prompt. |
+| `.codex/review-report.md` | Independent reviewer findings and verification evidence. |
 | `.codex-spec-state.json` | Checkpoint history, active checkpoint ID, evidence, timestamps, and recorded decisions. |
 | `.codex-spec-state.json.lock` | Temporary exclusive lock used while updating checkpoint state. |
 
@@ -143,6 +187,6 @@ Run the script test suite:
 python -m unittest discover -s tests -v
 ```
 
-The initial project verification passed all 17 tests. The tests use isolated temporary workspaces and exercise complete/incomplete contracts, placeholder detection, malformed metadata, Markdown parsing, missing or unreadable files, all six hooks, resolution history, invalid requests, corrupt state, lock conflicts, and custom state paths.
+The updated script suite passed all 26 tests. The tests use isolated temporary workspaces and exercise complete/incomplete contracts, placeholder detection, malformed metadata, Markdown parsing, missing or unreadable files, all eight hooks, version 2 contracts, handoff/report evidence requirements, resolution history, invalid requests, corrupt state, lock conflicts, and custom state paths.
 
 These tests verify the helper utilities. They do not prove that an agent will follow the instructions or that a future application's acceptance criteria have been met; each task needs its own implementation tests and acceptance evidence.
