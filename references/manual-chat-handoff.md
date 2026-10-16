@@ -11,7 +11,7 @@ use the size/risk policy or the user's explicit request.
 
 1. Save contract and tasks/progress; create a brief progress record for an S task
    if it now needs handoff. Do not overwrite unrelated runtime artifacts.
-2. Populate `.codex/handoff.md` from the template. Record absolute workspace,
+2. Populate `docs/handoff.md` from the template. Record absolute workspace,
    branch/HEAD when Git exists, comparison base, and dirty/untracked files. Include
    untracked files absent from git diff. Use file hashes when exact snapshot identity
    matters; a branch name is not a stable identity. Do not commit/discard user changes

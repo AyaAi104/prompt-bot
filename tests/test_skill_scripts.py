@@ -47,7 +47,7 @@ class ScriptTests(unittest.TestCase):
                                "--summary", "Choose storage", "--options", "SQLite,JSON", *args)
 
     def state(self):
-        return json.loads((self.work / ".codex-spec-state.json").read_text(encoding="utf-8"))
+        return json.loads((self.work / "docs/spec-state.json").read_text(encoding="utf-8"))
 
     def test_complete_contract(self):
         code, result = self.validate(contract())
@@ -141,10 +141,11 @@ class ScriptTests(unittest.TestCase):
                      ("--options", "A,B,C,D"), ("--summary", " "), ("--decision", "Accept")):
             self.assertEqual(self.emit("ARCH_DECISION_HOOK", *args).returncode, 2)
         self.assertEqual(self.emit("UNKNOWN").returncode, 2)
-        self.assertFalse((self.work / ".codex-spec-state.json").exists())
+        self.assertFalse((self.work / "docs/spec-state.json").exists())
 
     def test_corrupt_state_not_overwritten(self):
-        path = self.work / ".codex-spec-state.json"
+        path = self.work / "docs/spec-state.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
         for contents in ("{", "[]", '{"schema_version":1,"checkpoints":[{}]}',
                          '{"schema_version":1,"checkpoints":[],"active_checkpoint_id":"ghost"}'):
             path.write_text(contents, encoding="utf-8")
@@ -152,17 +153,27 @@ class ScriptTests(unittest.TestCase):
             self.assertEqual(path.read_text(encoding="utf-8"), contents)
 
     def test_concurrent_lock_is_preserved(self):
-        lock = self.work / ".codex-spec-state.json.lock"
+        lock = self.work / "docs/spec-state.json.lock"
+        lock.parent.mkdir(parents=True, exist_ok=True)
         lock.write_text("another writer", encoding="utf-8")
         self.assertEqual(self.emit().returncode, 2)
         self.assertEqual(lock.read_text(encoding="utf-8"), "another writer")
-        self.assertFalse((self.work / ".codex-spec-state.json").exists())
+        self.assertFalse((self.work / "docs/spec-state.json").exists())
 
     def test_custom_state_path(self):
         path = self.work / "nested" / "state.json"
         self.assertEqual(self.emit("SCOPE_DRIFT_HOOK", "--state-file", path).returncode, 0)
         self.assertTrue(path.exists())
         self.assertFalse(path.with_name("state.json.lock").exists())
+
+    def test_default_state_uses_docs_without_touching_legacy_directory(self):
+        # A file at the legacy directory path makes attempts to use it fail.
+        legacy = self.work / ("." + "codex")
+        legacy.write_text("Do not modify", encoding="utf-8")
+        result = self.emit()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((self.work / "docs" / "spec-state.json").is_file())
+        self.assertEqual(legacy.read_text(encoding="utf-8"), "Do not modify")
 
     def test_v2_contract_all_sizes(self):
         for size in ("S", "M", "L"):
@@ -196,7 +207,7 @@ class ScriptTests(unittest.TestCase):
             for contents in (b" \n", b"\xff"):
                 (self.work / "handoff.md").write_bytes(contents)
                 self.assertEqual(self.emit(hook, "--handoff-file", "handoff.md").returncode, 2)
-        self.assertFalse((self.work / ".codex-spec-state.json").exists())
+        self.assertFalse((self.work / "docs/spec-state.json").exists())
 
     def test_manual_review_waits_for_report_and_preserves_history(self):
         handoff = self.work / "handoff.md"
@@ -256,7 +267,7 @@ class ScriptTests(unittest.TestCase):
         self.assertEqual(self.emit("NEW_CHAT_REVIEW_HOOK", "--handoff-file", handoff).returncode, 0)
         state = self.state()
         state["checkpoints"][0]["handoff"]["sha256"] = "invalid"
-        path = self.work / ".codex-spec-state.json"
+        path = self.work / "docs/spec-state.json"
         path.write_text(json.dumps(state), encoding="utf-8")
         self.assertEqual(self.emit().returncode, 2)
         self.assertEqual(self.state(), state)

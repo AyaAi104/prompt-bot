@@ -33,7 +33,9 @@ evidence in the emitted record or accompanying chat. Recommendation defaults
 to the first option. The banner is a local output, not a message to the user:
 repeat the card in chat and wait there.
 
-The JSON file defaults to `.codex-spec-state.json` in the current directory.
+The JSON file defaults to `docs/spec-state.json` relative to the target workspace.
+The utility creates the parent directory when needed. All generated task documents,
+review materials, and evidence belong under that workspace's `docs/` directory.
 Use `--state-file PATH` to isolate a different workspace or test run. Schema:
 
 ```json
@@ -105,7 +107,7 @@ absolute path and a SHA-256 hash of its bytes. Do not update a handed-off file
 silently after recording its identity; make revisions explicit to the user.
 
 ```sh
-python3 scripts/hitl_checkpoint.py --hook-type NEW_CHAT_REVIEW_HOOK --summary "Independent review is ready" --options "Open review chat,Discuss blockers first" --handoff-file .codex/handoff.md --phase WAIT_FOR_USER_NEW_CHAT
+python3 scripts/hitl_checkpoint.py --hook-type NEW_CHAT_REVIEW_HOOK --summary "Independent review is ready" --options "Open review chat,Discuss blockers first" --handoff-file docs/handoff.md --phase WAIT_FOR_USER_NEW_CHAT
 ```
 
 Present a kind reminder, required file paths, and the complete copyable prompt.
@@ -115,7 +117,7 @@ CONTEXT_HANDOFF_HOOK uses the same arguments and can be resolved with the user's
 continuation instruction. Independent review requires an actual report:
 
 ```sh
-python3 scripts/hitl_checkpoint.py --resolve CHECKPOINT_ID --decision "User returned review; findings require repair" --review-report .codex/review-report.md
+python3 scripts/hitl_checkpoint.py --resolve CHECKPOINT_ID --decision "User returned review; findings require repair" --review-report docs/review-report.md
 ```
 
 For NEW_CHAT_REVIEW_HOOK, missing, empty, unreadable, or invalid UTF-8 reports

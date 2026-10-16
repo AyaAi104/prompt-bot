@@ -73,7 +73,7 @@
 智能体按照五个阶段开展工作：
 
 1. **PARSE_SPEC：解析规格。** 从用户请求和工作区信息中提取五项需求。
-2. **CLARIFY_GATE：澄清需求。** 解决不明确的问题，编写 `.codex/active-spec.md`，锁定并校验规格。每轮集中提出不超过五个关键问题。
+2. **CLARIFY_GATE：澄清需求。** 解决不明确的问题，编写 `docs/active-spec.md`，锁定并校验规格。每轮集中提出不超过五个关键问题。
 3. **BUILD_AND_VERIFY：实现与验证。** 拆分任务，将测试映射到验收标准，执行实现和测试；项目已有代码检查工具时，运行相应检查。
 4. **HITL_INTERRUPT_HOOK：人工介入。** 当重要决策或失败需要用户判断时，暂停受影响的工作。此阶段按条件触发，不要求每一步开发都经过人工确认。
 5. **ACCEPTANCE_SIGN_OFF：交付验收。** 逐项展示验收证据，请用户确认结果或提出修改意见。
@@ -92,14 +92,14 @@
 
 ## 校验需求规格
 
-将 `assets/spec-contract.template.md` 复制到 `.codex/active-spec.md`，必要时先创建 `.codex` 目录。根据确认后的需求填写五个核心章节，以及 Scope、Interfaces 和 Verification 三个补充章节。保留模板中的英文二级标题和元数据字段名，章节正文可以使用中文或其他语言。
+将 `assets/spec-contract.template.md` 复制到 `docs/active-spec.md`，必要时先创建 `docs` 目录。根据确认后的需求填写五个核心章节，以及 Scope、Interfaces 和 Verification 三个补充章节。保留模板中的英文二级标题和元数据字段名，章节正文可以使用中文或其他语言。
 
 新规格使用 `format_version: 2`，并设置 `size: S`、`M` 或 `L`。未声明版本或显式使用版本 1 的旧规格仍可校验，实质修订时应升级；未知版本会被拒绝。
 
 校验前，将五项状态设为 `CLEAR`，将 `locked` 设为 `true`，并确保 `revision` 是正整数。验收标准应包含 `AC-1` 等编号。
 
 ```sh
-python scripts/validate_spec.py .codex/active-spec.md
+python scripts/validate_spec.py docs/active-spec.md
 ```
 
 | 退出码 | 含义 |
@@ -151,28 +151,30 @@ S 级任务保留简短的五要素门槛，信息齐全时不做重复访谈；
 准备好真实交接文件后：
 
 ```sh
-python scripts/hitl_checkpoint.py --hook-type NEW_CHAT_REVIEW_HOOK --summary "需要独立审查" --options "手动开启新聊天,先讨论阻塞" --handoff-file .codex/handoff.md --phase WAIT_FOR_USER_NEW_CHAT
+python scripts/hitl_checkpoint.py --hook-type NEW_CHAT_REVIEW_HOOK --summary "需要独立审查" --options "手动开启新聊天,先讨论阻塞" --handoff-file docs/handoff.md --phase WAIT_FOR_USER_NEW_CHAT
 ```
 
 你带回真实报告后，原聊天根据你的决定记录结果：
 
 ```sh
-python scripts/hitl_checkpoint.py --resolve CHECKPOINT_ID --decision "用户带回审查报告，继续处理发现" --review-report .codex/review-report.md
+python scripts/hitl_checkpoint.py --resolve CHECKPOINT_ID --decision "用户带回审查报告，继续处理发现" --review-report docs/review-report.md
 ```
 
 新增检查点会记录文件绝对路径与 SHA-256。报告缺失、为空、不可读取或不是有效 UTF-8 时，不能解除审查检查点。收到报告不代表审查通过，AI 仍需核对快照并处理问题；脚本不能认证报告作者或判断报告质量。原有检查点命令和旧规格格式继续兼容。
 
 ## 运行时文件
 
+所有生成的任务文件统一放在目标项目的 `./docs/`，检查点默认写入 `docs/spec-state.json`。目录不存在时创建，保留其中已有的其他文档。旧状态文件仍可通过 `--state-file` 显式指定；历史检查点中的原始路径与哈希不在迁移时静默改写。技能安装目录不变。
+
 | 路径 | 功能 |
 | --- | --- |
-| `.codex/active-spec.md` | 智能体从模板生成的当前任务规格。 |
-| `.codex/tasks.md` | M/L 任务的纵向切片计划。 |
-| `.codex/progress.md` | 持久化进度、决定和阻塞。 |
-| `.codex/handoff.md` | 交接文件清单、快照、命令和新聊天 Prompt。 |
-| `.codex/review-report.md` | 独立审查发现和验证证据。 |
-| `.codex-spec-state.json` | 保存检查点历史、当前检查点 ID、相关证据、时间戳和用户决定。 |
-| `.codex-spec-state.json.lock` | 更新检查点状态时使用的临时独占锁文件。 |
+| `docs/active-spec.md` | 智能体从模板生成的当前任务规格。 |
+| `docs/tasks.md` | M/L 任务的纵向切片计划。 |
+| `docs/progress.md` | 持久化进度、决定和阻塞。 |
+| `docs/handoff.md` | 交接文件清单、快照、命令和新聊天 Prompt。 |
+| `docs/review-report.md` | 独立审查发现和验证证据。 |
+| `docs/spec-state.json` | 保存检查点历史、当前检查点 ID、相关证据、时间戳和用户决定。 |
+| `docs/spec-state.json.lock` | 更新检查点状态时使用的临时独占锁文件。 |
 
 这些文件在使用过程中生成，不是随项目提供的已完成任务状态。可以用 `--state-file PATH` 指定其他日志位置。每份状态文件只允许存在一个待解决检查点，解决后才能创建下一个。写入使用原子替换；状态损坏时会拒绝操作，不会清空历史重新开始。如果进程崩溃遗留锁文件，应先确认没有写入进程运行，再手动移除该锁。
 
@@ -184,6 +186,6 @@ python scripts/hitl_checkpoint.py --resolve CHECKPOINT_ID --decision "用户带�
 python -m unittest discover -s tests -v
 ```
 
-更新后的脚本套件已通过全部 26 项测试。测试使用隔离的临时工作区，覆盖完整与不完整规格、占位标记、错误元数据、Markdown 解析、文件缺失或读取失败、八种钩子、版本 2 规格、交接文件及报告要求、决策历史、无效请求、损坏状态、锁冲突和自定义日志路径。
+更新后的脚本套件已通过全部 27 项测试。测试使用隔离的临时工作区，覆盖完整与不完整规格、占位标记、错误元数据、Markdown 解析、文件缺失或读取失败、八种钩子、版本 2 规格、交接文件及报告要求、决策历史、无效请求、损坏状态、锁冲突和自定义日志路径。
 
 这些测试验证的是辅助工具，不代表智能体一定会遵守全部指令，也不代表后续开发的应用已经满足验收标准。每个实际任务仍需自己的实现测试和验收证据。

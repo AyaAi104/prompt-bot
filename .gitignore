@@ -220,6 +220,12 @@ __marimo__/
 .streamlit/secrets.toml
 
 # Task-local Prompt Bot contracts, review packets, and checkpoint state
-/.codex/
-/.codex-spec-state.json
-/.codex-spec-state.json.lock
+/docs
+/docs/active-spec.md
+/docs/tasks.md
+/docs/progress.md
+/docs/handoff.md
+/docs/review-report.md
+/docs/spec-state.json
+/docs/spec-state.json.lock
+/docs/skill-update-review/

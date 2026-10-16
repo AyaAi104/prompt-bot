@@ -109,7 +109,7 @@ def main(argv=None):
     parser.add_argument("--decision")
     parser.add_argument("--handoff-file", type=Path, help="Required for manual new-chat hooks")
     parser.add_argument("--review-report", type=Path, help="Required when resolving a new-chat review")
-    parser.add_argument("--state-file", type=Path, default=Path(".codex-spec-state.json"))
+    parser.add_argument("--state-file", type=Path, default=Path("docs/spec-state.json"))
     args = parser.parse_args(argv)
     if args.hook_type:
         options = [item.strip() for item in (args.options or "").split(",")]

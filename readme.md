@@ -76,7 +76,7 @@ The specification has five mandatory dimensions:
 The agent follows five phases:
 
 1. **PARSE_SPEC:** Extract the five dimensions from the request and workspace evidence.
-2. **CLARIFY_GATE:** Clarify unresolved requirements, write `.codex/active-spec.md`, and validate the locked contract. Group questions into one turn with at most five high-impact questions.
+2. **CLARIFY_GATE:** Clarify unresolved requirements, write `docs/active-spec.md`, and validate the locked contract. Group questions into one turn with at most five high-impact questions.
 3. **BUILD_AND_VERIFY:** Implement atomic tasks and run tests mapped to acceptance criteria. Run the project's configured linter when available.
 4. **HITL_INTERRUPT_HOOK:** Pause affected work when a material decision or failure requires human input. This phase occurs when triggered, rather than on every implementation step.
 5. **ACCEPTANCE_SIGN_OFF:** Present criterion-by-criterion evidence and request final acceptance or refinements.
@@ -95,14 +95,14 @@ The commands below assume the skill scripts and target workspace are in the same
 
 ## Validate a specification
 
-Copy `assets/spec-contract.template.md` to `.codex/active-spec.md`, creating the `.codex` directory if needed. Fill all five core sections plus Scope, Interfaces, and Verification with confirmed requirements. Keep the exact English level-two headings and metadata keys from the template; the prose may be written in Chinese or another language.
+Copy `assets/spec-contract.template.md` to `docs/active-spec.md`, creating the `docs` directory if needed. Fill all five core sections plus Scope, Interfaces, and Verification with confirmed requirements. Keep the exact English level-two headings and metadata keys from the template; the prose may be written in Chinese or another language.
 
 New contracts use `format_version: 2` and `size: S`, `M`, or `L`. Missing or explicit version 1 remains supported for older contracts; upgrade on material revision. Unknown versions fail.
 
 Before validation, set each status to `CLEAR`, set `locked: true`, and use a positive integer `revision`. Include acceptance identifiers such as `AC-1`.
 
 ```sh
-python scripts/validate_spec.py .codex/active-spec.md
+python scripts/validate_spec.py docs/active-spec.md
 ```
 
 | Exit code | Meaning |
@@ -154,28 +154,30 @@ When fresh context or cross-validation is required, the agent saves a handoff an
 After a real handoff file is prepared:
 
 ```sh
-python scripts/hitl_checkpoint.py --hook-type NEW_CHAT_REVIEW_HOOK --summary "Independent review required" --options "Open new chat,Discuss blockers first" --handoff-file .codex/handoff.md --phase WAIT_FOR_USER_NEW_CHAT
+python scripts/hitl_checkpoint.py --hook-type NEW_CHAT_REVIEW_HOOK --summary "Independent review required" --options "Open new chat,Discuss blockers first" --handoff-file docs/handoff.md --phase WAIT_FOR_USER_NEW_CHAT
 ```
 
 After you return the actual report, the author records it with your decision:
 
 ```sh
-python scripts/hitl_checkpoint.py --resolve CHECKPOINT_ID --decision "User returned review; reconcile findings" --review-report .codex/review-report.md
+python scripts/hitl_checkpoint.py --resolve CHECKPOINT_ID --decision "User returned review; reconcile findings" --review-report docs/review-report.md
 ```
 
 The new hooks record absolute artifact paths and SHA-256 hashes. A missing, empty, unreadable, or invalid UTF-8 report cannot resolve a review checkpoint. Receipt of a report is not approval: the agent must check snapshot identity and address findings. The CLI cannot authenticate who wrote it or judge its quality. Original hook commands and legacy contracts remain compatible.
 
 ## Runtime artifacts
 
+All generated task files now live under the target project’s `./docs/`, including checkpoint state at `docs/spec-state.json`. The directory is created as needed; unrelated existing documentation is preserved. Legacy state can still be selected explicitly with `--state-file`. Historical checkpoint paths and hashes describe original evidence and are not silently rewritten during migration. Skill installation paths are unchanged.
+
 | Path | Purpose |
 | --- | --- |
-| `.codex/active-spec.md` | Task-specific specification created by the agent from the template. |
-| `.codex/tasks.md` | M/L vertical slice plan. |
-| `.codex/progress.md` | Persistent progress and blockers. |
-| `.codex/handoff.md` | Files, snapshot, commands, and copyable manual new-chat prompt. |
-| `.codex/review-report.md` | Independent reviewer findings and verification evidence. |
-| `.codex-spec-state.json` | Checkpoint history, active checkpoint ID, evidence, timestamps, and recorded decisions. |
-| `.codex-spec-state.json.lock` | Temporary exclusive lock used while updating checkpoint state. |
+| `docs/active-spec.md` | Task-specific specification created by the agent from the template. |
+| `docs/tasks.md` | M/L vertical slice plan. |
+| `docs/progress.md` | Persistent progress and blockers. |
+| `docs/handoff.md` | Files, snapshot, commands, and copyable manual new-chat prompt. |
+| `docs/review-report.md` | Independent reviewer findings and verification evidence. |
+| `docs/spec-state.json` | Checkpoint history, active checkpoint ID, evidence, timestamps, and recorded decisions. |
+| `docs/spec-state.json.lock` | Temporary exclusive lock used while updating checkpoint state. |
 
 These files are created during use, not shipped as a completed task state. Use `--state-file PATH` to change the checkpoint log location. Each state file permits only one pending checkpoint; resolve it before emitting another. Atomic replacement protects updates, and malformed state is rejected without resetting history. If a crash leaves a lock file, verify that no writer is running before manually removing it.
 
@@ -187,6 +189,6 @@ Run the script test suite:
 python -m unittest discover -s tests -v
 ```
 
-The updated script suite passed all 26 tests. The tests use isolated temporary workspaces and exercise complete/incomplete contracts, placeholder detection, malformed metadata, Markdown parsing, missing or unreadable files, all eight hooks, version 2 contracts, handoff/report evidence requirements, resolution history, invalid requests, corrupt state, lock conflicts, and custom state paths.
+The updated script suite passed all 27 tests. The tests use isolated temporary workspaces and exercise complete/incomplete contracts, placeholder detection, malformed metadata, Markdown parsing, missing or unreadable files, all eight hooks, version 2 contracts, handoff/report evidence requirements, resolution history, invalid requests, corrupt state, lock conflicts, and custom state paths.
 
 These tests verify the helper utilities. They do not prove that an agent will follow the instructions or that a future application's acceptance criteria have been met; each task needs its own implementation tests and acceptance evidence.
